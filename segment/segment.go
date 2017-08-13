@@ -26,6 +26,7 @@ type indexPair struct {
 
 // segment is an SS Table file.
 // TODO: Make this use m'mapped files.
+// TODO: Store the index at the end of the file.
 type segment struct {
     fn      string
     segSize int
