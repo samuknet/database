@@ -1,5 +1,4 @@
 // package segment exports SegmentCollection for dumping data to.
-// TODO: Add tests
 package segment
 
 import (
@@ -11,12 +10,21 @@ import (
     "path/filepath"
     "strconv"
     "sync"
+    "unsafe"
 )
 
-// TODO: rename this to be lowercase.
-type Object struct {
+// Document is a key-value JSON like structure.
+type Document map[string]interface{}
+
+// KeyDocument is a Document with a string key.  This is what the database stores.
+type KeyDocument struct {
     Key string
-    Obj map[string]interface{}
+    Doc Document
+}
+
+// SizeInBytes returns an estimate of number of bytes that the document uses in memory.
+func (kd KeyDocument) SizeInBytes() uint32 {
+    return uint32(unsafe.Sizeof(kd))
 }
 
 type indexPair struct {
@@ -42,7 +50,7 @@ func newSegment(fn string, segSize int) *segment {
 }
 
 // serialize takes an arbitrary map and converts it to a byte buffer.
-func serialize(data map[string]interface{}) (*bytes.Buffer, error) {
+func serialize(data *KeyDocument) (*bytes.Buffer, error) {
     buf := new(bytes.Buffer)
     enc := gob.NewEncoder(buf)
     err := enc.Encode(data)
@@ -53,22 +61,22 @@ func serialize(data map[string]interface{}) (*bytes.Buffer, error) {
 }
 
 // deserialize takes a byte buffer and converts it to an arbitrary map.
-func deserialize(buf *bytes.Buffer) (map[string]interface{}, error) {
-    var data map[string]interface{}
+func deserialize(buf *bytes.Buffer) (*KeyDocument, error) {
+    var doc KeyDocument
     dec := gob.NewDecoder(buf)
-    err := dec.Decode(&data)
+    err := dec.Decode(&doc)
     if err != nil {
         return nil, err
     }
-    return data, nil
+    return &doc, nil
 }
 
 // write the provided data to the segment.
-func (s *segment) write(objs []*Object) error {
+func (s *segment) write(objs []*KeyDocument) error {
     // Serialize data into byte buffer.
     buf := new(bytes.Buffer)
     for _, obj := range objs {
-        part, err := serialize(obj.Obj)
+        part, err := serialize(obj)
         if err != nil {
             return err
         }
@@ -85,7 +93,7 @@ func (s *segment) write(objs []*Object) error {
     return ioutil.WriteFile(s.fn, buf.Bytes(), os.ModePerm)
 }
 
-func (s *segment) lookup(key string) (map[string]interface{}, error) {
+func (s *segment) lookup(key string) (*KeyDocument, error) {
     if _, ok := s.index[key]; !ok {
         return nil, fmt.Errorf("Key %q not found in %v.", key, s.fn)
     }
@@ -152,7 +160,7 @@ func (c *Collection) nextFn() string {
 }
 
 // Dump takes an arbitrary map and records it into a new segment.
-func (c *Collection) Dump(objs []*Object) error {
+func (c *Collection) Dump(kds []*KeyDocument) error {
     // TODO: Write to the existing segment if it is not full.
     // Make new segment.
     s := newSegment(c.nextFn(), c.segSize)
@@ -160,7 +168,7 @@ func (c *Collection) Dump(objs []*Object) error {
     // Fill segment with objects.
 
     // Write objects to segment.
-    err := s.write(objs)
+    err := s.write(kds)
     if err != nil {
         return err
     }
@@ -173,7 +181,7 @@ func (c *Collection) Dump(objs []*Object) error {
     return nil
 }
 
-func (c *Collection) Lookup(key string) (map[string]interface{}, error) {
+func (c *Collection) Lookup(key string) (*KeyDocument, error) {
     c.RLock()
     segNum := len(c.ss) - 1
     c.RUnlock()
@@ -191,7 +199,7 @@ func (c *Collection) Lookup(key string) (map[string]interface{}, error) {
     return nil, fmt.Errorf("Key %q not found in any segments.", key)
 }
 
-// CompactAndMerge compacts each segment file and joins them into one
+// CompactAndMerge compacts each segment file and joins them into one.
 func (c Collection) CompactAndMerge() error {
     // TODO: Implement this.
     return nil

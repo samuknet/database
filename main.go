@@ -6,10 +6,11 @@ import (
     "log"
     "os"
     "strconv"
+    "sync"
 )
 
 const (
-    segSize = 800
+    segSize = 1800
     dir     = "fs"
 )
 
@@ -21,15 +22,15 @@ func main() {
         Dir:     dir,
     })
 
-    var data []*segment.Object
+    var data []*segment.KeyDocument
     for i := 0; i < 10; i++ {
-        obj := make(map[string]interface{})
+        doc := make(segment.Document)
         name := "person" + strconv.Itoa(i)
-        obj["name"] = name
-        obj["age"] = 21
-        data = append(data, &segment.Object{
+        doc["name"] = name
+        doc["age"] = 21
+        data = append(data, &segment.KeyDocument{
             Key: name,
-            Obj: obj,
+            Doc: doc,
         })
     }
     err := c.Dump(data)
@@ -37,8 +38,15 @@ func main() {
         log.Fatal(err)
     }
     fmt.Println("Collection", c)
-    for i := 0; i < 10; i++ {
-        person, _ := c.Lookup("person" + strconv.Itoa(i))
-        fmt.Println(person)
+    var wg sync.WaitGroup
+    n := 10
+    wg.Add(n)
+    for i := 0; i < n; i++ {
+        go func(key string) {
+            defer wg.Done()
+            person, _ := c.Lookup(key)
+            fmt.Println(person)
+        }("person" + strconv.Itoa(i))
     }
+    wg.Wait()
 }

@@ -9,7 +9,7 @@ import (
 )
 
 var (
-    dir     = "test"
+    dir     = "segment_test"
     segSize = 800
 )
 
@@ -21,15 +21,15 @@ func TestSegmentCollectionEndToEnd(t *testing.T) {
         Dir:     dir,
     })
 
-    var data []*Object
+    var data []*KeyDocument
     for i := 0; i < 10; i++ {
-        obj := make(map[string]interface{})
+        doc := make(Document)
         name := "person" + strconv.Itoa(i)
-        obj["name"] = name
-        obj["age"] = i
-        data = append(data, &Object{
+        doc["name"] = name
+        doc["age"] = i
+        data = append(data, &KeyDocument{
             Key: name,
-            Obj: obj,
+            Doc: doc,
         })
     }
     err := c.Dump(data)
@@ -40,7 +40,7 @@ func TestSegmentCollectionEndToEnd(t *testing.T) {
     fmt.Println("Collection", c)
     for i := 0; i < 10; i++ {
         key := "person" + strconv.Itoa(i)
-        want := map[string]interface{}{"name": key, "age": strconv.Itoa(i)}
+        want := Document{"name": key, "age": strconv.Itoa(i)}
         got, err := c.Lookup(key)
         if err != nil {
             fmt.Sprintf("c.Lookup(%q) = _, %v, want %v, nil", key, err, want)
