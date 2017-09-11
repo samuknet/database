@@ -43,6 +43,5 @@ func TestDatabaseEndToEnd(t *testing.T) {
 			fmt.Sprintf("dbh.Lookup(%q) = %v, %v, want %v, nil", key, got, err, want)
 		}
 	}
-
 	os.RemoveAll(dir)
 }

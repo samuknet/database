@@ -2,13 +2,15 @@
 package db
 
 import (
+    "fmt"
     "github.com/samuknet/database/segment"
-
-    "math"
     "sort"
     "sync"
-    "sync/atomic"
     "time"
+)
+
+var (
+    maxIndexBytes = uint32(1024 * 10) // Must be comfortably smaller than segSize.
 )
 
 // byKey implements sort.Interface for []*KeyDocument based on
@@ -23,9 +25,10 @@ func (a byKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 type topLevelIndex struct {
     sync.RWMutex // the lock on the topLevelIndex locks the pointers to the indexes.
     index        *sync.Map
-    bufferIndex  *sync.Map // The index currently being written to disk. Nil if nothing is being written.
-    bytes        uint32    // estimated number of bytes currently in the index.
-    maxBytes     uint32    // the max number of bytes that should be stored in the index.
+    bufferIndex  *sync.Map    // The index currently being written to disk. Nil if nothing is being written.
+    bytes        uint32       // estimated number of bytes currently in the index.
+    bl           sync.RWMutex // Guards the bytes variable.
+    maxBytes     uint32       // the max number of bytes that should be stored in the index.
 }
 
 func newTopLevelIndex(maxBytes uint32) *topLevelIndex {
@@ -49,7 +52,9 @@ func (tli *topLevelIndex) lookup(key string) (*segment.KeyDocument, bool) {
     }
     if tli.bufferIndex != nil {
         kd, ok = tli.bufferIndex.Load(key)
-        return kd.(*segment.KeyDocument), ok
+        if ok {
+            return kd.(*segment.KeyDocument), ok
+        }
     }
 
     return nil, false
@@ -67,12 +72,16 @@ func (tli *topLevelIndex) insert(kd *segment.KeyDocument) error {
 }
 
 func (tli *topLevelIndex) incrementBytes(delta uint32) {
-    atomic.AddUint32(&tli.bytes, delta)
+    tli.bl.Lock()
+    defer tli.bl.Unlock()
+    tli.bytes += delta
 }
 
 // atCapacity returns true if the topLevelIndex is full.
 // TODO: Check that this won't conflict with the writing.
 func (tli *topLevelIndex) atCapacity() bool {
+    tli.bl.RLock()
+    defer tli.bl.RUnlock()
     return tli.bytes >= tli.maxBytes
 }
 
@@ -90,15 +99,13 @@ type Handle struct {
 // NewHandle creates a new handle, with the given segment size, storing files
 // in the provided dir.
 func NewHandle(segSize int, dir string) *Handle {
-    maxIndexBytes := uint32(math.Ceil(0.8 * float64(segSize)))
     return &Handle{
         tli: newTopLevelIndex(maxIndexBytes), // Index max size is 80% of seg size to account for underestimating actual size.
         segments: segment.NewCollection(segment.Config{
             SegSize: segSize,
             Dir:     dir,
         }),
-        maxIndexBytes: maxIndexBytes,
-        writes:        make(chan *sync.Map),
+        writes: make(chan *sync.Map),
     }
 }
 
@@ -150,20 +157,21 @@ func (db *Handle) Start() {
 // dispatches a task to write it to the disk
 func (db *Handle) diskDispatcher() {
     // TODO: Change sleep time based on the current load and the size of the top level index.
-    t := 3
+    t := 500
     for {
         if db.tli.atCapacity() {
-            db.tli.Lock()
-            // MID: There is nothing else reading or writing to the top level index.
-            // TODO: Allow 'n' old indexes here.
+            // TODO: Allow n buffered indexes.
             // Blocks until there is no index being written to disk.
             db.writes <- db.tli.index
+            db.tli.Lock()
+            // MID: There is nothing else reading or writing to the top level index.
             db.tli.bufferIndex = db.tli.index
             db.tli.index = &sync.Map{}
             db.tli.bytes = 0
             db.tli.Unlock()
+            fmt.Println("Disk Dispatched")
         }
-        time.Sleep(time.Duration(t) * time.Second)
+        time.Sleep(time.Duration(t) * time.Millisecond)
     }
 }
 
@@ -171,29 +179,27 @@ func (db *Handle) diskDispatcher() {
 // one by one and writes them to disk.  Only one index can be written
 // at any one time.
 func (db *Handle) diskWorker() {
-    for {
-        for index := range db.writes {
-            // Pre: index is immutable.  It is only being read from.
-            var res []*segment.KeyDocument
-            index.Range(func(key, kd interface{}) bool {
-                res = append(res, kd.(*segment.KeyDocument))
-                return true
-            })
-            // Sort the slice.
-            sort.Sort(byKey(res))
-            db.segments.Dump(res)
-            // TODO: Log error if it failed. Maybe retry.
-
-            // Once the disk write has completed, clear the bufferIndex
-            // if it is the same as the work we just did.
-            // This avoids potentially redundant disk reads and reduces
-            // the time for which there is a bufferIndex which is also on disk.
-            db.tli.Lock()
-            if db.tli.bufferIndex == index {
-                // If this has just been written to disk, remove it from the buffer.
-                db.tli.bufferIndex = nil
-            }
-            db.tli.Unlock()
+    for index := range db.writes {
+        // Pre: index is immutable.  It is only being read from.
+        var res []*segment.KeyDocument
+        index.Range(func(key, kd interface{}) bool {
+            res = append(res, kd.(*segment.KeyDocument))
+            return true
+        })
+        // Sort the slice.
+        sort.Sort(byKey(res))
+        err := db.segments.Dump(res)
+        // TODO: Log error if it failed and consider retrying.
+        // Once the disk write has completed, clear the bufferIndex
+        // if it is the same as the work we just did.
+        // This avoids potentially redundant disk reads and reduces
+        // the time for which there is a bufferIndex which is also on disk.
+        db.tli.Lock()
+        if db.tli.bufferIndex == index {
+            // If this has just been written to disk, remove it from the buffer.
+            db.tli.bufferIndex = nil
         }
+        db.tli.Unlock()
+        fmt.Println("Disk Work complete: ", err)
     }
 }

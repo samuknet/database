@@ -10,9 +10,11 @@ import (
     "path/filepath"
     "strconv"
     "sync"
+    "time"
     "unsafe"
 )
 
+// TODO: Move these types to database.go or a new types.go file.
 // Document is a key-value JSON like structure.
 type Document map[string]interface{}
 
@@ -120,12 +122,9 @@ func (s *segment) lookup(key string) (*KeyDocument, error) {
 
 // Collection manages a set of segments that can be dumped to.
 type Collection struct {
-    // RWMutex guards ss and nextSegId
+    // RWMutex guards ss
     sync.RWMutex
-    ss []*segment
-    // TODO: Consider giving nextSegId its own RWMutex.
-    nextSegId int
-
+    ss      []*segment
     segSize int
     dir     string
 }
@@ -144,19 +143,14 @@ func NewCollection(config Config) *Collection {
 
 // String gives a human readable representation of the collection.
 func (c *Collection) String() string {
-    // TODO: Consider locking on nextSegId.
-    return fmt.Sprintf("{nextSegId: %v, segSize: %v, dir: %v}", c.nextSegId, c.segSize, c.dir)
-}
-
-// nextFn gets the next filename for the segment.
-// Will block until c.nextSegId is available.
-// TODO: Get unique filenames without relying on an int.
-func (c *Collection) nextFn() string {
     c.RLock()
     defer c.RUnlock()
-    fn := filepath.Join(c.dir, strconv.Itoa(c.nextSegId))
-    c.nextSegId++
-    return fn
+    return fmt.Sprintf("{len(ss): %v, segSize: %v, dir: %v}", len(c.ss), c.segSize, c.dir)
+}
+
+// nextFn gets the next filename for the segment using the current timestamp.
+func (c *Collection) nextFn() string {
+    return filepath.Join(c.dir, strconv.Itoa(int(time.Now().Unix())))
 }
 
 // Dump takes an arbitrary map and records it into a new segment.
