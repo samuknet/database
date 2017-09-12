@@ -195,6 +195,23 @@ func (c *Collection) Lookup(key string) (*KeyDocument, error) {
 
 // CompactAndMerge compacts each segment file and joins them into one.
 func (c Collection) CompactAndMerge() error {
-    // TODO: Implement this.
+    // older := 0
+    // newer := 1
+
+    // c.RLock()
+    // max := len(c.ss) - 1
+    // c.RUnlock()
+
+    // // TODO: No need to go up to max, consider stopping sooner when database is
+    // // down to a reasonable size.
+    // // TODO: Check older is < max.
+    // for newer := 1; newer < max; newer++ {
+    //     // TODO: Verify that we don't need to lock here.
+    //     o := c.ss[older]
+    //     n := c.ss[newer]
+
+    //     older = newer
+    //     newer = older + 1
+    // }
     return nil
 }
